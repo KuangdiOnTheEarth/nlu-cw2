@@ -143,13 +143,26 @@ class LSTMEncoder(Seq2SeqEncoder):
             e.g., 
                 sent_tensor = create_sentence_tensor(...) 
                 # sent_tensor.size = [batch, sent_len, hidden]
-        2.  Describe what happens when self.bidirectional is set to True. 
+        2.  Describe what happens when self.bidirectional is set to True.
+            The LSTM is turned into biLSTM, which means the input sentence will be processed in two directions.
+            The two final hidden vectors, and the two final call states will be concatenated.
+            More details:
+            (1) After the processing of biLSTM, in final_hidden_states the 2 final hidden vectors will be stacked next to each other. 
+            If the biLSTM has multiple layers, the hidden vectors for each layer would also be stacked in order. 
+            (2) The combine_directions() function uses two slicing operations start from index 0 and 1, with step of 2 until the end.
+            Since in final_hidden_state, the vectors at the same direction are stored in every second place,       
+            these two slicing leads to two tensors that separately contains the hidden vector in different directions. 
+            Finally, the hidden vector at different direction will be concatenated for each layer.
         3.  What is the difference between final_hidden_states and final_cell_states?
+            final_hidden_states will encounter gradient vanishing problem, so in each direction of LSTM it will forget the begining information.
+            But the computation of memory cell is linear and thus avoids gradient vanishing, so final_cell_states can represents the whole sentence.
         '''
         if self.bidirectional:
             def combine_directions(outs):
                 return torch.cat([outs[0: outs.size(0): 2], outs[1: outs.size(0): 2]], dim=2)
+            # concatenate final hidden vectors: [2 * num_layers, batch_size, hidden_size] -> [num_layers, batch_size, 2 * hidden_size]
             final_hidden_states = combine_directions(final_hidden_states)
+            # concatenate final memory cells: [2 * num_layers, batch_size, hidden_size] -> [num_layers, batch_size, 2 * hidden_size]
             final_cell_states = combine_directions(final_cell_states)
         '''___QUESTION-1-DESCRIBE-A-END___'''
 
@@ -166,13 +179,13 @@ class AttentionLayer(nn.Module):
     def __init__(self, input_dims, output_dims):
         super().__init__()
         # Scoring method is 'general'
-        self.src_projection = nn.Linear(input_dims, output_dims, bias=False)
+        self.src_projection = nn.Linear(input_dims, output_dims, bias=False) # here input_dims == output_dims
         self.context_plus_hidden_projection = nn.Linear(input_dims + output_dims, output_dims, bias=False)
 
     def forward(self, tgt_input, encoder_out, src_mask):
         # tgt_input has shape = [batch_size, input_dims]
         # encoder_out has shape = [src_time_steps, batch_size, output_dims]
-        # src_mask has shape = [src_time_steps, batch_size]
+        # src_mask has shape = [batch_size, src_time_steps]
 
         # Get attention scores
         # [batch_size, src_time_steps, output_dims]
@@ -188,17 +201,32 @@ class AttentionLayer(nn.Module):
             e.g., 
                 sent_tensor = create_sentence_tensor(...) 
                 # sent_tensor.size = [batch, sent_len, hidden]
-        2.  Describe how the attention context vector is calculated. 
+        2.  Describe how the attention context vector is calculated.
+            After attention scores are calculated, a softmax is applied to convert them 
+            into attention weights, i.e. an attention distribution over all input time steps
+            Then the context vector can be computed as the weighted sum of all the encoder hidden states, 
+            weighted by the corresponding attention weight.
         3.  Why do we need to apply a mask to the attention scores?
+            We want the attention mechanism to focus only on the valid input words, and ignore the PAD tokens.
+            The masking operation turns the attention score at the padding position into 0s,
+            which would ensure these positions are assigned with 0 attention weights in the later softmax.
+            As a result, the PAD tokens won't contribute anything to the computation of context vector.
         '''
         if src_mask is not None:
             src_mask = src_mask.unsqueeze(dim=1)
+            # src_mask.size = [batch_size, 1, src_time_steps]
             attn_scores.masked_fill_(src_mask, float('-inf'))
 
         attn_weights = F.softmax(attn_scores, dim=-1)
+        # attn_weights.size = [batch_size, 1, src_time_steps]
         attn_context = torch.bmm(attn_weights, encoder_out).squeeze(dim=1)
+        # [b, n, m] @ [b, m, p] -> [b, n, p]
+        # [batch_size, 1, src_time_steps] @ [batch_size, src_time_steps, output_dims] -> [batch_size, 1, output_dims]
+        # attn_context.size = [batch_size, output_dims]
         context_plus_hidden = torch.cat([tgt_input, attn_context], dim=1)
+        # context_plus_hidden.size = [batch_size, input_dims + output_dims]
         attn_out = torch.tanh(self.context_plus_hidden_projection(context_plus_hidden))
+        # attn_out.size = [batch_size, output_dims]
         '''___QUESTION-1-DESCRIBE-B-END___'''
 
         return attn_out, attn_weights.squeeze(dim=1)
@@ -209,11 +237,23 @@ class AttentionLayer(nn.Module):
         '''
         ___QUESTION-1-DESCRIBE-C-START___
         1.  Add tensor shape annotation to each of the output tensor
-        2.  How are attention scores calculated? 
+        2.  How are attention scores calculated?
+            The attention score at each time step is calculated as the the dot product 
+            between the encoder output hidden state at that step and the current decoder hidden state.
         3.  What role does batch matrix multiplication (i.e. torch.bmm()) play in aligning encoder and decoder representations?
+            The decoder hidden state is represented as a row, and the encoder hidden state at each time step is represented as a column.
+            Then in the multiplication, the decoder representation (row) is aligned with all the encoder representation (columns), 
+            and generate one attention score for the alignment between decoder vector and each encoder vector.
         '''
+        # tgt_input.size = [batch_size, input_dims]
+        # encoder_out.size = [batch_size, src_time_steps, output_dims]
+
         projected_encoder_out = self.src_projection(encoder_out).transpose(2, 1)
+        # projected_encoder_out.size = [batch_size, hidden_dims, src_time_steps]
         attn_scores = torch.bmm(tgt_input.unsqueeze(dim=1), projected_encoder_out)
+        # [b, n, m] @ [b, m, p] -> [b, n, p]
+        # [batch_size, 1, input_dims] @ [batch_size, input_dims, src_time_steps] -> [batch_size, 1, src_time_steps]
+        # attn_scores.size = [batch_size, 1, src_time_steps]
         '''___QUESTION-1-DESCRIBE-C-END___'''
 
         return attn_scores
@@ -289,16 +329,24 @@ class LSTMDecoder(Seq2SeqDecoder):
         ___QUESTION-1-DESCRIBE-D-START___
         1.  Add tensor shape annotation to each of the output tensor
         2.  Describe how the decoder state is initialized. 
+            For each sentence, the decoder state is initialized as a 0-vector of hidden_size dimension.
         3.  When is cached_state == None? 
+            ???????? At the first time step of decoding, where no previous states exists.????????????
         4.  What role does input_feed play?
+            It is the output of the decoder block at current step, it will 
+            (1) be projected onto the vocabulary to generate an output word.
+            (2) be fed into the next decoder time step as an input.
         '''
         cached_state = utils.get_incremental_state(self, incremental_state, 'cached_state')
         if cached_state is not None:
             tgt_hidden_states, tgt_cell_states, input_feed = cached_state
         else:
             tgt_hidden_states = [torch.zeros(tgt_inputs.size()[0], self.hidden_size) for i in range(len(self.layers))]
+            # tgt_hidden_states.size = [num_of_layers, batch_size, hidden_dims]
             tgt_cell_states = [torch.zeros(tgt_inputs.size()[0], self.hidden_size) for i in range(len(self.layers))]
+            # tgt_cell_states.size = [num_of_layers, batch_size, hidden_dims]
             input_feed = tgt_embeddings.data.new(batch_size, self.hidden_size).zero_()
+            # input_feed.size = [batch_size, hidden_dims]
         '''___QUESTION-1-DESCRIBE-D-END___'''
 
         # Initialize attention output node

@@ -122,13 +122,22 @@ def main(args):
             1.  Add tensor shape annotation to each of the output tensor
             2.  Add line-by-line description about the following lines of code do.
             '''
+            # use the model to generate output
+            # sentences in tgt_inputs all starts with eos
             output, _ = model(sample['src_tokens'], sample['src_lengths'], sample['tgt_inputs'])
 
+            # compute the average cross entropy loss over sentences
+            # loss is a scalar
             loss = \
                 criterion(output.view(-1, output.size(-1)), sample['tgt_tokens'].view(-1)) / len(sample['src_lengths'])
+            # compute the gradients for parameters based on the cross entropy loss
             loss.backward()
+            # clip gradient norm for model parameters,
+            # i.e. shrink the gradients once they exceeds some range, in this way avoids gradient explosion
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_norm)
+            # perform a step of parameter optimization based on the gradients
             optimizer.step()
+            # clear the stored gradients, so they will starts from 0 in the next batch of training
             optimizer.zero_grad()
             '''___QUESTION-1-DESCRIBE-F-END___'''
 
