@@ -65,28 +65,40 @@ def main(args):
     # Iterate over the test set
     all_hyps = {}
     for i, sample in enumerate(progress_bar):
+        print("\n================= Batch " + str(i) + "========================================\n")
         with torch.no_grad():
             # Compute the encoder output
             encoder_out = model.encoder(sample['src_tokens'], sample['src_lengths'])
             go_slice = \
                 torch.ones(sample['src_tokens'].shape[0], 1).fill_(tgt_dict.eos_idx).type_as(sample['src_tokens'])
+            # sample['src_tokens'].shape = [10, 6]
+            # go_slice.size = [batch_size, 1] <-- initialized as EOS indices
             prev_words = go_slice
             next_words = None
 
         for _ in range(args.max_len):
+            print("================= Translate step " + str(prev_words.size()[1]))
             with torch.no_grad():
                 # Compute the decoder output by repeatedly feeding it the decoded sentence prefix
                 decoder_out, _ = model.decoder(prev_words, encoder_out)
             # Suppress <UNK>s
             _, next_candidates = torch.topk(decoder_out, 2, dim=-1)
-            best_candidates = next_candidates[:, :, 0]
-            backoff_candidates = next_candidates[:, :, 1]
+            # next_candidates.size = [batch_size, cur_time_step, 2]
+            # the indices of output on-hot encoding is the word indices in dictionary
+            best_candidates = next_candidates[:, :, 0]  # [batch_size, cur_time_step]
+            backoff_candidates = next_candidates[:, :, 1]  # [batch_size, cur_time_step]
             next_words = torch.where(best_candidates == tgt_dict.unk_idx, backoff_candidates, best_candidates)
-            prev_words = torch.cat([go_slice, next_words], dim=1)
+            # next_words.size = [batch_size, cur_time_step]
+            print("output words generated: " + str(next_words.size()[1]))
+            # if next_words.size()[1] < 4:
+            #     # if prev_words[0][-1] != next_words[0][-2]:
+            #     print(prev_words[0][1:])
+            #     print(next_words[0])
+            prev_words = torch.cat([go_slice, next_words], dim=1)  # [[EOS + generated outputs] for sentences]
 
         # Segment into sentences
-        decoded_batch = next_words.numpy()
-        output_sentences = [decoded_batch[row, :] for row in range(decoded_batch.shape[0])]
+        decoded_batch = next_words.numpy()  # next_words.size = [batch_size, max_len] -> ndarray
+        output_sentences = [decoded_batch[row, :] for row in range(decoded_batch.shape[0])]  # list
         assert(len(output_sentences) == len(sample['id'].data))
 
         # Remove padding

@@ -359,6 +359,7 @@ class LSTMDecoder(Seq2SeqDecoder):
 
         for j in range(tgt_time_steps):
             # Concatenate the current token embedding with output from previous time step (i.e. 'input feeding')
+            # kd: the "current token" is the output of the prior decoder time step, sine the EOS is added at beginning
             lstm_input = torch.cat([tgt_embeddings[j, :, :], input_feed], dim=1)
 
             for layer_id, rnn_layer in enumerate(self.layers):
@@ -393,6 +394,7 @@ class LSTMDecoder(Seq2SeqDecoder):
                 input_feed = tgt_hidden_states[-1]
                 # input_feed.size = [batch_size, hidden_dims]
             else:
+                # print(str(len(self.layers)) + " " + str(len(tgt_hidden_states)) + " " + str(tgt_hidden_states[-1].size()))
                 input_feed, step_attn_weights = self.attention(tgt_hidden_states[-1], src_out, src_mask)
                 # input_feed.size = [batch_size, hidden_dims]
                 # step_attn_weights.size = [batch_size, src_time_steps]
@@ -407,6 +409,7 @@ class LSTMDecoder(Seq2SeqDecoder):
 
             input_feed = F.dropout(input_feed, p=self.dropout_out, training=self.training)
             rnn_outputs.append(input_feed)
+            # print("Decoder step " + str(j) + "; rnn_outputs: " + str(len(rnn_outputs)))
             '''___QUESTION-1-DESCRIBE-E-END___'''
 
         # Cache previous states (only used during incremental, auto-regressive generation)
