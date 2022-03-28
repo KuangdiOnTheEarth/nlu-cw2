@@ -144,8 +144,8 @@ class LSTMEncoder(Seq2SeqEncoder):
                 sent_tensor = create_sentence_tensor(...) 
                 # sent_tensor.size = [batch, sent_len, hidden]
         2.  Describe what happens when self.bidirectional is set to True.
-            The LSTM is turned into biLSTM, which means the input sentence will be processed in two directions.
-            The two final hidden vectors, and the two final call states will be concatenated.
+            The LSTM becomes biLSTM. The input sentence will be processed in two directions,
+            the resulted two final hidden vectors, and the two final call states will be concatenated as the final result.
             More details:
             (1) After the processing of biLSTM, in final_hidden_states the 2 final hidden vectors will be stacked next to each other. 
             If the biLSTM has multiple layers, the hidden vectors for each layer would also be stacked in order. 
@@ -243,7 +243,7 @@ class AttentionLayer(nn.Module):
         3.  What role does batch matrix multiplication (i.e. torch.bmm()) play in aligning encoder and decoder representations?
             The decoder hidden state is represented as a row, and the encoder hidden state at each time step is represented as a column.
             Then in the multiplication, the decoder representation (row) is aligned with all the encoder representation (columns), 
-            and generate one attention score for the alignment between decoder vector and each encoder vector.
+            and generates one attention score for the alignment between decoder vector and each encoder vector.
         '''
         # tgt_input.size = [batch_size, input_dims]
         # encoder_out.size = [batch_size, src_time_steps, output_dims]
@@ -378,7 +378,7 @@ class LSTMDecoder(Seq2SeqDecoder):
                 After the target state is processed by the decoder LSTM, 
                 attention layer will use that target state and encoder hidden states to compute a context vector.
                 The context vector is concatenated to the decoder hidden state, 
-                and the resulted vector is then projected back the size of hidden state.
+                and the resulted vector is then projected back to the size of hidden state.
                 In this way, the hidden state is enriched with source context information.
             3.  Why is the attention function given the previous target state as one of its inputs?
                 The attention layer will use this target state to decide 
