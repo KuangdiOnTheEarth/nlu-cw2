@@ -245,9 +245,9 @@ class MultiHeadAttention(nn.Module):
         # q,k,v.size = [num_heads, batch_size, time_steps, head_embed_size]
 
         hb = self.num_heads * batch_size
-        q = q.view(hb, -1, self.head_embed_size)
-        k = k.view(hb, -1, self.head_embed_size)
-        v = v.view(hb, -1, self.head_embed_size)
+        q = q.contiguous().view(hb, -1, self.head_embed_size)
+        k = k.contiguous().view(hb, -1, self.head_embed_size)
+        v = v.contiguous().view(hb, -1, self.head_embed_size)
         # q,k,v.size = [num_heads * batch_size, time_steps, head_embed_size]
 
         k = k.transpose(1, 2)
@@ -258,7 +258,7 @@ class MultiHeadAttention(nn.Module):
         # [b, n, m] @ [b, m, p] -> [b, n, p]
         # attn_weights = [num_heads * batch_size, q_time_steps, k_time_steps]
 
-        if key_padding_mask:
+        if key_padding_mask is not None:
             # key_padding_mask.size = [batch_size, k_time_steps]
             key_padding_mask = key_padding_mask.view(1, batch_size, 1, -1)
             # key_padding_mask.size = [1, batch_size, 1, k_time_steps]
@@ -275,9 +275,9 @@ class MultiHeadAttention(nn.Module):
                                 # # otherwise the attn_weights will have different shape depends on whether the if-block is activated
                                 # attn_weights = attn_weights.view(self.num_heads * batch_size, tgt_time_steps, -1)
 
-        if attn_mask:
+        if attn_mask is not None:
             # attn_mask.size = [tgt_time_steps, src_time_steps]
-            attn_mask = attn_mask.view(1, tgt_time_steps, -1).repeat(self.num_heads * batch_size, batch_size, 1, 1)
+            attn_mask = attn_mask.view(1, tgt_time_steps, -1).repeat(self.num_heads * batch_size, 1, 1)
             # [tgt_time_steps, src_time_steps] -> [1, tgt_time_steps, src_time_steps] -> [num_heads * batch_size, q_time_steps, k_time_steps]
             attn_weights.masked_fill_(attn_mask.eq(float("-inf")), -float('inf'))
             # attn_weights = [num_heads * batch_size, q_time_steps, k_time_steps]
@@ -290,14 +290,12 @@ class MultiHeadAttention(nn.Module):
 
         attn = attn.view(self.num_heads, batch_size, tgt_time_steps, self.head_embed_size)
         attn = attn.transpose(0, 2)
-        attn = attn.view(tgt_time_steps, batch_size, self.num_heads * self.head_embed_size)
-        # attn.size = [tgt_time_steps, batch_size, embed_dim]
+        attn = attn.contiguous().view(tgt_time_steps, batch_size, self.num_heads * self.head_embed_size)
+        attn = self.out_proj(attn)
+        # attn.size = [tgt_time_steps, batch_size, embed_dim] -> [tgt_time_steps, batch_size, embed_dim]
 
         attn_weights = attn_weights.view(self.num_heads, batch_size, tgt_time_steps, -1) if need_weights else None
         # attn_weights.size = [num_heads, batch_size, tgt_time_steps, key.size(0)]
-
-
-        
 
         # attn = torch.zeros(size=(tgt_time_steps, batch_size, embed_dim))
         # # attn.size = [tgt_time_steps, batch_size, embed_dim]
