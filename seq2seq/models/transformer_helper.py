@@ -265,33 +265,44 @@ class MultiHeadAttention(nn.Module):
             key_padding_mask = key_padding_mask.repeat(self.num_heads, 1, tgt_time_steps, 1)
             # tgt_time_steps = q_time_steps
             # [1, batch_size, 1, k_time_steps] -> [num_heads, batch_size, q_time_steps, k_time_steps]
-
-            attn_weights = attn_weights.view(self.num_heads, batch_size, tgt_time_steps, -1)
-            # [num_heads*batch_size, q_time_steps, k_time_steps] -> [num_heads, batch_size, q_time_steps, k_time_steps]
-
+            key_padding_mask = key_padding_mask.view(self.num_heads * batch_size, tgt_time_steps, -1)
+            # key_padding_mask.size = [num_heads * batch_size, q_time_steps, k_time_steps]
+                                # attn_weights = attn_weights.view(self.num_heads, batch_size, tgt_time_steps, -1)
+                                # [num_heads*batch_size, q_time_steps, k_time_steps] -> [num_heads, batch_size, q_time_steps, k_time_steps]
             attn_weights.masked_fill_(key_padding_mask, -float('inf'))
-            # attn_weights.size = [num_heads, batch_size, q_time_steps, k_time_steps]
-
-            # convert back to the shape before entering this if-block
-            # otherwise the attn_weights will have different shape depends on whether the if-block is activated
-            attn_weights = attn_weights.view(self.num_heads * batch_size, tgt_time_steps, -1)
             # attn_weights = [num_heads * batch_size, q_time_steps, k_time_steps]
+                                # # convert back to the shape before entering this if-block
+                                # # otherwise the attn_weights will have different shape depends on whether the if-block is activated
+                                # attn_weights = attn_weights.view(self.num_heads * batch_size, tgt_time_steps, -1)
 
         if attn_mask:
             # attn_mask.size = [tgt_time_steps, src_time_steps]
             attn_mask = attn_mask.view(1, tgt_time_steps, -1).repeat(self.num_heads * batch_size, batch_size, 1, 1)
             # [tgt_time_steps, src_time_steps] -> [1, tgt_time_steps, src_time_steps] -> [num_heads * batch_size, q_time_steps, k_time_steps]
-
             attn_weights.masked_fill_(attn_mask.eq(float("-inf")), -float('inf'))
             # attn_weights = [num_heads * batch_size, q_time_steps, k_time_steps]
 
+        attn_weights = F.softmax(attn_weights, dim=-1)
+        attn = torch.bmm(attn_weights, v)
+        # [b, n, m] @ [b, m, p] -> [b, n, p]
+        # [num_heads * batch_size, q_time_steps, k_time_steps] @ [num_heads * batch_size, v_time_steps, head_embed_size]
+        # -> attn.size = [num_heads * batch_size, q_time_steps, head_embed_size]
 
-       
-
-        attn = torch.zeros(size=(tgt_time_steps, batch_size, embed_dim))
+        attn = attn.view(self.num_heads, batch_size, tgt_time_steps, self.head_embed_size)
+        attn = attn.transpose(0, 2)
+        attn = attn.view(tgt_time_steps, batch_size, self.num_heads * self.head_embed_size)
         # attn.size = [tgt_time_steps, batch_size, embed_dim]
-        attn_weights = torch.zeros(size=(self.num_heads, batch_size, tgt_time_steps, -1)) if need_weights else None
+
+        attn_weights = attn_weights.view(self.num_heads, batch_size, tgt_time_steps, -1) if need_weights else None
         # attn_weights.size = [num_heads, batch_size, tgt_time_steps, key.size(0)]
+
+
+        
+
+        # attn = torch.zeros(size=(tgt_time_steps, batch_size, embed_dim))
+        # # attn.size = [tgt_time_steps, batch_size, embed_dim]
+        # attn_weights = torch.zeros(size=(self.num_heads, batch_size, tgt_time_steps, -1)) if need_weights else None
+        # # attn_weights.size = [num_heads, batch_size, tgt_time_steps, key.size(0)]
         # TODO: --------------------------------------------------------------------- CUT
 
         '''
