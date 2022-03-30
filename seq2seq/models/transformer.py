@@ -89,6 +89,7 @@ class TransformerEncoder(Seq2SeqEncoder):
     def forward(self, src_tokens, src_lengths):
         # Embed tokens indices
         embeddings = self.embed_scale * self.embedding(src_tokens)
+        # kd: embeddings.size = [batch_size, src_time_steps, num_features]
 
         # Clone for output state
         src_embeddings = embeddings.clone()
@@ -97,9 +98,13 @@ class TransformerEncoder(Seq2SeqEncoder):
         ___QUESTION-6-DESCRIBE-A-START___
         1.  Add tensor shape annotation to each of the output tensor
         2.  What is the purpose of the positional embeddings in the encoder and decoder? 
+            They encode the position of words in a input sentence into real valued vectors, providing information of word positions and word order.
         3.  Why can't we use only the embeddings similar to for the LSTM? 
+            The transformer is position invariant, it can not directly represent word orders.
+            Therefore, to take the information expressed by word order into account, we should manually add the positional embeddings.
         '''
         embeddings += self.embed_positions(src_tokens)
+        # embeddings.size = [batch_size, src_time_steps, num_features]
         '''
         ___QUESTION-6-DESCRIBE-A-END___
         '''
@@ -111,7 +116,7 @@ class TransformerEncoder(Seq2SeqEncoder):
         # Compute padding mask for attention
         encoder_padding_mask = src_tokens.eq(self.padding_idx)
         if not encoder_padding_mask.any():
-            encoder_padding_mask = None
+            encoder_padding_mask = None  # kd: become None if no padding in batch
 
         # Forward pass through each Transformer Encoder Layer
         for layer in self.layers:
@@ -158,6 +163,9 @@ class TransformerDecoder(Seq2SeqDecoder):
         nn.init.normal_(self.embed_out.weight, mean=0, std=self.output_embed_dim ** -0.5)
 
     def forward(self, tgt_inputs, encoder_out=None, incremental_state=None, features_only=False):
+        # kd: tgt_inputs.size = [batch_size, tgt_time_steps] the output sentences (with token id)
+        # kd: encoder_out is the
+
         # Embed positions
         positions = self.embed_positions(tgt_inputs, incremental_state=incremental_state)
 
@@ -188,10 +196,29 @@ class TransformerDecoder(Seq2SeqDecoder):
             ___QUESTION-6-DESCRIBE-B-START___
             1.  Add tensor shape annotation to each of the output tensor
             2.  What is the purpose of self_attn_mask? 
+                It will be used in the attention computation, 
+                masking out the values at all positions which are at the right side of the current query position.
+                In this way it helps the attention mechanism only focus on the left-side positions.
             3.  Why do we need it in the decoder but not in the encoder?
+                The decoder generates the output at each position one by one. 
+                At each time step, it should only use the information from positions up to the current position,
+                and the rightward positions should be un-accessible since they have not been predicted.
+                In real use case the rightward positions are unknown by nature, but in training time the whole target sentence is given.
+                Therefore, this mask is required to manually ignore illegal states during training, making the training process match with the real use case.
+            
+                However, in the encoder, the whole input embedding sequence is known by all the positions.
+                To encode the contextual information more completely, each position is expected to be used in the self-attention computation of all positions.
+                Therefore, the mask is not required in the encoder.
             4.  Why do we not need a mask for incremental decoding?
+                The masking in decoder helps the training process of the model matches with the real scenario.
+                In the real use case, when generating the output at a position,
+                the decoder can only access to the positions up to the current one (since the rightward positions are unpredicted/unknown).
+                So masking out the corresponding information in training prevents it from using the future information in prediction,
+                which may leads to high training accuracy but low validation/test accuracy.
             '''
             self_attn_mask = self.buffered_future_mask(forward_state) if incremental_state is None else None
+            # self_attn_mask.size = [tgt_time_steps, src_time_steps]
+            # kd: if it is incremental_state --> sel_attn_mask is None
             '''
             ___QUESTION-6-DESCRIBE-B-END___
             '''

@@ -32,9 +32,17 @@ class TransformerEncoderLayer(nn.Module):
         ___QUESTION-6-DESCRIBE-D-START___
         1.  Add tensor shape annotation to EVERY TENSOR below (NOT just the output tensor)
         2.  What is the purpose of encoder_padding_mask? 
+            The padding mask helps ignore the padding tokens and only focus on the word tokens in sentences.
+            The mask will zero out the attention score at the padding positions, 
+            in this way the attention mechanism only focus on the words in a sentence, and ignores the meaningless padding token embeddings.
         3.  What will the output shape of `state' Tensor be after multi-head attention?
+            It should be still [src_time_steps, batch_size, num_features]. 
+            Though the output of different attention heads are concatenated, the resulted vector should be projected back to normal dimension before being returned.
         '''
         state, _ = self.self_attn(query=state, key=state, value=state, key_padding_mask=encoder_padding_mask)
+        # state.size = [src_time_steps, batch_size, num_features]
+        # encoder_padding_mask.size = [batch_size, src_time_steps, num_features]
+        # state.size = [src_time_steps, batch_size, num_features]
         '''
         ___QUESTION-6-DESCRIBE-D-END___
         '''
@@ -62,14 +70,14 @@ class TransformerDecoderLayer(nn.Module):
         self.activation_dropout = args.activation_dropout
         self.self_attn_layer_norm = LayerNorm(self.embed_dim)
 
-        self.self_attn = MultiHeadAttention(
+        self.self_attn = MultiHeadAttention(  # kd: used for the first masked self-attention
             embed_dim=self.embed_dim,
             num_attn_heads=args.decoder_attention_heads,
             dropout=args.attention_dropout,
             self_attention=True
         )
 
-        self.encoder_attn = MultiHeadAttention(
+        self.encoder_attn = MultiHeadAttention(  # kd: used for the second multi-head attention on encoder outputs
             embed_dim=self.embed_dim,
             num_attn_heads=args.decoder_attention_heads,
             kdim=args.encoder_embed_dim,
@@ -85,8 +93,8 @@ class TransformerDecoderLayer(nn.Module):
         self.need_attn = True
 
     def forward(self,
-                state,
-                encoder_out=None,
+                state,  # [tgt_time_steps, batch_size, num_features]
+                encoder_out=None,  # [src_time_steps, batch_size, num_features]
                 encoder_padding_mask=None,
                 incremental_state=None,
                 prev_self_attn_state=None,
@@ -100,12 +108,12 @@ class TransformerDecoderLayer(nn.Module):
         need_attn = True if need_head_weights else need_attn
 
         residual = state.clone()
-        state, _ = self.self_attn(query=state,
+        state, _ = self.self_attn(query=state,                          # kd: first masked (multi-head?) self-attention
                                   key=state,
                                   value=state,
                                   key_padding_mask=self_attn_padding_mask,
                                   need_weights=False,
-                                  attn_mask=self_attn_mask)
+                                  attn_mask=self_attn_mask)             # here apply the triangle self-attention mask
         state = F.dropout(state, p=self.dropout, training=self.training)
         state += residual
         state = self.self_attn_layer_norm(state)
@@ -114,13 +122,17 @@ class TransformerDecoderLayer(nn.Module):
         '''
         ___QUESTION-6-DESCRIBE-E-START___
         1.  Add tensor shape annotation to EVERY TENSOR below (NOT just the output tensor)
-        2.  How does encoder attention differ from self attention? 
+        2.  How does encoder attention differ from self attention?
+        
         3.  What is the difference between key_padding_mask and attn_mask? 
+            key_padding_mask zeros out the padding tokens sequences.
+            attn_mask zeros out the forward keys in unreached positions during dot-production, 
         4.  If you understand this difference, then why don't we need to give attn_mask here?
+            
         '''
-        state, attn = self.encoder_attn(query=state,
-                                        key=encoder_out,
-                                        value=encoder_out,
+        state, attn = self.encoder_attn(query=state,        # [tgt_time_steps, batch_size, num_features]
+                                        key=encoder_out,    # [src_time_steps, batch_size, num_features]
+                                        value=encoder_out,  # [src_time_steps, batch_size, num_features]
                                         key_padding_mask=encoder_padding_mask,
                                         need_weights=need_attn or (not self.training and self.need_attn))
         '''
@@ -191,8 +203,8 @@ class MultiHeadAttention(nn.Module):
                 query,
                 key,
                 value,
-                key_padding_mask=None,
-                attn_mask=None,
+                key_padding_mask=None,  # [batch_size, src_time_steps]
+                attn_mask=None,         # [tgt_time_steps, src_time_steps]
                 need_weights=True):
 
         # Get size features
@@ -211,8 +223,75 @@ class MultiHeadAttention(nn.Module):
         # attn_weights is the combined output of h parallel heads of Attention(Q,K,V) in Vaswani et al. 2017
         # attn_weights must be size [num_heads, batch_size, tgt_time_steps, key.size(0)]
         # TODO: REPLACE THESE LINES WITH YOUR IMPLEMENTATION ------------------------ CUT
+        # query.size =
+        #                           [src_time_steps, batch_size, num_features] in encoder self-attention
+        #                           [tgt_time_steps, batch_size, num_features] in decoder self-attention
+        #                           [tgt_time_steps, batch_size, num_features] in encoder-decoder attention
+        # key.size & value.size =
+        #                           [src_time_steps, batch_size, num_features] in encoder self-attention
+        #                           [tgt_time_steps, batch_size, num_features] in decoder self-attention
+        #                           [src_time_steps, batch_size, num_features] in encoder-decoder attention
+
+        # split the embedding into num_heads splits, each split of sub-embedding acts as one head
+        #  num_heads * head_embed_size = embed_dim = num_features
+        q = self.q_proj(query).view(-1, batch_size, self.num_heads, self.head_embed_size)
+        k = self.k_proj(key).view(-1, batch_size, self.num_heads, self.head_embed_size)
+        v = self.v_proj(value).view(-1, batch_size, self.num_heads, self.head_embed_size)
+        # q,k,v.size = [time_steps, batch_size, num_heads, head_embed_size]
+
+        q = q.transpose(0, 2)
+        k = k.transpose(0, 2)
+        v = v.transpose(0, 2)
+        # q,k,v.size = [num_heads, batch_size, time_steps, head_embed_size]
+
+        hb = self.num_heads * batch_size
+        q = q.view(hb, -1, self.head_embed_size)
+        k = k.view(hb, -1, self.head_embed_size)
+        v = v.view(hb, -1, self.head_embed_size)
+        # q,k,v.size = [num_heads * batch_size, time_steps, head_embed_size]
+
+        k = k.transpose(1, 2)
+        # q.size = [num_heads * batch_size, q_time_steps, head_embed_size]
+        # k.size = [num_heads * batch_size, head_embed_size, k_time_steps]
+
+        attn_weights = torch.bmm(q, k) / self.head_scaling  # (Q * K^T) / sqrt(d_k)
+        # [b, n, m] @ [b, m, p] -> [b, n, p]
+        # attn_weights = [num_heads * batch_size, q_time_steps, k_time_steps]
+
+        if key_padding_mask:
+            # key_padding_mask.size = [batch_size, k_time_steps]
+            key_padding_mask = key_padding_mask.view(1, batch_size, 1, -1)
+            # key_padding_mask.size = [1, batch_size, 1, k_time_steps]
+            key_padding_mask = key_padding_mask.repeat(self.num_heads, 1, tgt_time_steps, 1)
+            # tgt_time_steps = q_time_steps
+            # [1, batch_size, 1, k_time_steps] -> [num_heads, batch_size, q_time_steps, k_time_steps]
+
+            attn_weights = attn_weights.view(self.num_heads, batch_size, tgt_time_steps, -1)
+            # [num_heads*batch_size, q_time_steps, k_time_steps] -> [num_heads, batch_size, q_time_steps, k_time_steps]
+
+            attn_weights.masked_fill_(key_padding_mask, -float('inf'))
+            # attn_weights.size = [num_heads, batch_size, q_time_steps, k_time_steps]
+
+            # convert back to the shape before entering this if-block
+            # otherwise the attn_weights will have different shape depends on whether the if-block is activated
+            attn_weights = attn_weights.view(self.num_heads * batch_size, tgt_time_steps, -1)
+            # attn_weights = [num_heads * batch_size, q_time_steps, k_time_steps]
+
+        if attn_mask:
+            # attn_mask.size = [tgt_time_steps, src_time_steps]
+            attn_mask = attn_mask.view(1, tgt_time_steps, -1).repeat(self.num_heads * batch_size, batch_size, 1, 1)
+            # [tgt_time_steps, src_time_steps] -> [1, tgt_time_steps, src_time_steps] -> [num_heads * batch_size, q_time_steps, k_time_steps]
+
+            attn_weights.masked_fill_(attn_mask.eq(float("-inf")), -float('inf'))
+            # attn_weights = [num_heads * batch_size, q_time_steps, k_time_steps]
+
+
+       
+
         attn = torch.zeros(size=(tgt_time_steps, batch_size, embed_dim))
+        # attn.size = [tgt_time_steps, batch_size, embed_dim]
         attn_weights = torch.zeros(size=(self.num_heads, batch_size, tgt_time_steps, -1)) if need_weights else None
+        # attn_weights.size = [num_heads, batch_size, tgt_time_steps, key.size(0)]
         # TODO: --------------------------------------------------------------------- CUT
 
         '''
